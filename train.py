@@ -156,8 +156,8 @@ class Trainer:
     def train_step(self, data_dict):
         images = data_dict['image'].to(self.device)
         masks = data_dict['mask'].to(self.device)
-        print("images.shape", images.shape)  # [18,3,256,256]
-        print("masks.shape", masks.shape)  # [18,256,256]
+        # print("images.shape", images.shape)  # [18,3,256,256]
+        # print("masks.shape", masks.shape)  # [18,256,256]
         domain_list = data_dict['domain'].to(self.device)
         # print("domain_list.shape", domain_list.shape)  # [18]
         # print("domain_list:", domain_list)  # [0, 0, 0, 0, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3]
@@ -165,20 +165,20 @@ class Trainer:
         # 内容编码和分割
         content_features = self.aencoder(images)  # [18,8,256,256]
         seg_pred = self.segmentor(content_features)  # [18,3,256,256]
-        print("content_features", content_features.shape)
-        print("seg_pred.shape:", seg_pred.shape)
+        # print("content_features", content_features.shape)
+        # print("seg_pred.shape:", seg_pred.shape)
         seg_loss = self.segmentor.Seg_loss(seg_pred, masks)
         # print("seg_loss：",seg_loss)
 
         # 风格编码
         style_code, mu, logvar = self.sencoder(images)  # [18, 16]
-        print("style_code.shape:", style_code.shape)
+        # print("style_code.shape:", style_code.shape)
         kl_loss = self.sencoder.KL_loss(mu, logvar)
         # print("KL_loss", kl_loss)
 
         # 图片重建
         reconstructed = self.decoder(content_features, style_code)  # [18, 3, 256, 256])
-        print("reconstructed_image.shape:", reconstructed.shape)
+        # print("reconstructed_image.shape:", reconstructed.shape)
         rec_loss = self.decoder.reconstructed_loss(images, reconstructed)
         # print("rec_loss", rec_loss)
 
@@ -216,10 +216,10 @@ class Trainer:
             batch_count = 0
 
             # 创建进度条
-            pbar = tqdm(enumerate(self.dataloaders), 
-                       total=len(self.dataloaders),
-                       desc=f'Epoch {epoch}/{self.args.epoches-1}',
-                       ncols=100)
+            pbar = tqdm(enumerate(self.dataloaders),
+                        total=len(self.dataloaders),
+                        desc=f'Epoch {epoch}/{self.args.epoches - 1}',
+                        ncols=100)
 
             for i, data in pbar:
                 loss_dict = self.train_step(data)
@@ -235,9 +235,9 @@ class Trainer:
 
                 # 更新进度条显示的损失值
                 pbar.set_postfix({
-                    'loss': f"{loss_dict['total_loss']:.4f}",
-                    'seg_loss': f"{loss_dict['seg_loss']:.4f}",
-                    'kl_loss': f"{loss_dict['kl_loss']:.4f}"
+                    'loss': f"{loss_dict['total_loss'].item():.4f}",
+                    'seg_loss': f"{loss_dict['seg_loss'].item():.4f}",
+                    'kl_loss': f"{loss_dict['kl_loss'].item():.4f}"
                 })
 
                 if i % self.args.print_interval == 0:
