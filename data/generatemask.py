@@ -13,17 +13,17 @@ import cv2
 
 def dealDomain1():
     # 设置输入输出文件夹路径
-    input_folder = "/IMBR_Data/Student-home/2022U_ZhaoYue/MyCode/CDDSA/data/1/mask"  # 替换为你的输入文件夹路径
-    output_folder = "/IMBR_Data/Student-home/2022U_ZhaoYue/MyCode/CDDSA/data/1/mask"  # 替换为你的输出文件夹路径
+    input_folder = "/IMBR_Data/Student-home/2022U_ZhaoYue/MyCode/CDDSA/data/0/gt"  # 替换为你的输入文件夹路径
+    output_folder = "/IMBR_Data/Student-home/2022U_ZhaoYue/MyCode/CDDSA/data/0/mask"  # 替换为你的输出文件夹路径
 
     # 创建输出目录（如果不存在）
     os.makedirs(output_folder, exist_ok=True)
 
     # 映射规则
     mapping = {
-        0: 255,  # 黑 → 白
-        1: 128,  # 白 → 灰
-        2: 0  # 灰 → 黑
+        255:0,   # 0-视盘
+        128:1,   # 1-视杯
+        0: 2    # 2-背景
     }
 
     # 遍历文件夹内所有PNG图像
@@ -35,6 +35,7 @@ def dealDomain1():
             # 加载图像并转灰度
             img = Image.open(input_path).convert("L")
             arr = np.array(img)
+            print("图像中唯一像素值: ", np.unique(arr))
 
             # 应用像素映射
             mapped = np.vectorize(mapping.get)(arr)
@@ -44,6 +45,8 @@ def dealDomain1():
             result_img.save(output_path)
 
             print(f"已处理: {filename}")
+
+dealDomain1()
 
 def read_coordinates(txt_file):
     with open(txt_file, "r") as f:
@@ -231,8 +234,8 @@ def find_max_od_size(mask_folder, target_value=128,fix='.jpg'):
 # max_width, max_height = find_max_od_size(mask_folder,128,'.bmp')
 # print(f"视盘区域的最大宽度为: {max_width}, 最大高度为: {max_height}")
 
-img_dir="/IMBR_Data/Student-home/2022U_ZhaoYue/MyCode/CDDSA/data/2/image"
-mask_dir="/IMBR_Data/Student-home/2022U_ZhaoYue/MyCode/CDDSA/data/2/mask"
-out_img_dir="/IMBR_Data/Student-home/2022U_ZhaoYue/MyCode/CDDSA/data/2/cropImage"
-out_mask_dir="/IMBR_Data/Student-home/2022U_ZhaoYue/MyCode/CDDSA/data/2/cropMask"
-batch_process(img_dir, mask_dir, out_img_dir, out_mask_dir)
+# img_dir="/IMBR_Data/Student-home/2022U_ZhaoYue/MyCode/CDDSA/data/2/image"
+# mask_dir="/IMBR_Data/Student-home/2022U_ZhaoYue/MyCode/CDDSA/data/2/mask"
+# out_img_dir="/IMBR_Data/Student-home/2022U_ZhaoYue/MyCode/CDDSA/data/2/cropImage"
+# out_mask_dir="/IMBR_Data/Student-home/2022U_ZhaoYue/MyCode/CDDSA/data/2/cropMask"
+# batch_process(img_dir, mask_dir, out_img_dir, out_mask_dir)

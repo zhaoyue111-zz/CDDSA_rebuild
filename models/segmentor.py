@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from .matrix import compute_dice
+from utils.matrix import compute_dice
 from .encoder import AEncoder
 from .block import conv_bn_lrelu
 
@@ -9,11 +9,11 @@ class Segmentor(nn.Module):
         input shape: (B,C,W,H)
         output shape: (B,num_class,W,H)
     '''
-    def __init__(self,in_channels,hidden_size,num_classes=3):
+    def __init__(self,in_channel,hidden_size,num_classes=3):
         super(Segmentor,self).__init__()
 
         # 论文中
-        self.conv1 = conv_bn_lrelu(in_channels,hidden_size,kernel_size=3,stride=1,padding=1)
+        self.conv1 = conv_bn_lrelu(in_channel,hidden_size,kernel_size=3,stride=1,padding=1)
         self.conv2 = conv_bn_lrelu(hidden_size,hidden_size,kernel_size=1,stride=1,padding=0)
         self.out=nn.Conv2d(hidden_size,num_classes,kernel_size=1,stride=1,padding=0)
 

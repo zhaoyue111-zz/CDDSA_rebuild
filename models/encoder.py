@@ -87,4 +87,4 @@ if __name__ == '__main__':
     print(out1[0].shape)  # z
     print(out1[1].shape)  # mu
     print(out1[2].shape)  # var
-    print(sencoder.KL_loss(out1[1],out1[2]))
+    # print(sencoder.KL_loss(out1[1],out1[2]))

@@ -128,10 +128,52 @@ def process_pixel(domain_id):
 
     print(f"域 {domain_id} 的掩码处理完成，保存在 {output_dir}")
 
+#val
+def process_name(domain_id):
+    base_dir = '.'
+    domain_dir = os.path.join(base_dir, str(domain_id), 'val')
+    image_dir = os.path.join(domain_dir, 'image')
+    mask_dir = os.path.join(domain_dir, 'mask')
+    gt_dir = os.path.join(domain_dir, 'gt')
+
+    image_files = [f for f in os.listdir(image_dir) if f.endswith('.jpg')]
+    mask_files = [f for f in os.listdir(mask_dir) if f.endswith('.png')]
+    gt_files = [f for f in os.listdir(gt_dir) if f.endswith('.png')]
+
+    # 重命名图像
+    for idx, img_file in enumerate(sorted(image_files)):
+        img_path = os.path.join(image_dir, img_file)
+        img = cv2.imread(img_path)
+        # idx =idx+ 400
+        new_name = f"{idx:04d}.jpg"
+        new_img_path = os.path.join(image_dir, new_name)
+        cv2.imwrite(new_img_path, img)
+    print("img over")
+
+    # 重命名 mask（保持 .png）
+    for idx, mask_file in enumerate(sorted(mask_files)):
+        # idx=idx+400
+        new_name = f"{idx:04d}.png"
+        mask_path = os.path.join(mask_dir, mask_file)
+        mask = cv2.imread(mask_path, cv2.IMREAD_UNCHANGED)
+        new_mask_path = os.path.join(mask_dir, new_name)
+        cv2.imwrite(new_mask_path, mask)
+    print("mask over")
+
+    # 重命名 gt（保持 .png）
+    for idx, gt_file in enumerate(sorted(gt_files)):
+        # idx=idx+400
+        new_name = f"{idx:04d}.png"
+        gt_path = os.path.join(gt_dir, gt_file)
+        gt = cv2.imread(gt_path, cv2.IMREAD_UNCHANGED)
+        new_gt_path = os.path.join(gt_dir, new_name)
+        cv2.imwrite(new_gt_path, gt)
+    print("gt over")
+
 def process_all_domains():
-    for domain_id in [0,1,2,3]:
+    for domain_id in [0,2,3]:
         print(f"开始处理域 {domain_id}")
-        process_pixel(domain_id)
+        process_domain(domain_id)
         print(f"域 {domain_id} 处理完成\\n")
 
 if __name__ == '__main__':

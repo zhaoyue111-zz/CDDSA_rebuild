@@ -3,6 +3,18 @@ from PIL import Image
 from torch.utils.data import Dataset, DataLoader
 import os
 import numpy as np
+from torchvision import transforms
+import random
+
+class ToTensor(object):
+    def __call__(self, sample):
+        image = sample['image']
+        mask = sample['mask']
+        # Convert PIL Image to Tensor, handle grayscale masks for segmentation
+        image = transforms.ToTensor()(image)
+        # For mask, convert to LongTensor and ensure it's single channel (H, W)
+        mask = torch.from_numpy(np.array(mask, dtype=np.int64))
+        return {'image': image, 'mask': mask, 'domain_id': sample['domain_id']}
 
 class FundusDataset(Dataset):
     '''
@@ -13,128 +25,180 @@ class FundusDataset(Dataset):
         self.domain = domain
         self.transform = transform
 
-        # 获取图像和分割标签路径
         self.image_dir = os.path.join(self.root_dir, 'image')
         self.mask_dir = os.path.join(self.root_dir, 'mask')
 
         self.image_files = sorted([f for f in os.listdir(self.image_dir)
-                                 if f.endswith(('.jpg', '.png', '.jpeg'))])
+                                   if f.endswith(('.jpg', '.png', '.jpeg'))])
+        # 检查是否有文件
+        if not self.image_files:
+            raise ValueError(f"No image files found in {self.image_dir}. Please check the path and file extensions.")
 
     def __len__(self):
         return len(self.image_files)
 
+    # 获取一个batch中的每个图片
     def __getitem__(self, idx):
-        # 读取图像
         img_name = self.image_files[idx]
         img_path = os.path.join(self.image_dir, img_name)
         mask_path = os.path.join(self.mask_dir, img_name.replace('.jpg', '.png'))
 
-        # 读取图像和mask
         image = Image.open(img_path).convert('RGB')
-        mask = Image.open(mask_path)
+        mask = Image.open(mask_path).convert('L')
 
-        # 转换为tensor
-        image = torch.FloatTensor(np.array(image).transpose(2, 0, 1)) / 255.0  # [3, H, W]
-        mask = torch.LongTensor(np.array(mask))  # [H, W]
+        sample = {'image': image, 'mask': mask, 'domain_id': self.domain}
 
         if self.transform:
-            image = self.transform(image)
+            sample = self.transform(sample)
 
-        return {
-            'image': image,
-            'mask': mask,
-            'domain': int(self.domain)
-        }
+        return sample
 
 class MultiDomainIterator:
-    def __init__(self, root_dir, domain_list,sample_list):
-        '''
-        domain_list:[0,2,3]
-        sample_list:[3,4,5]
-        '''
-        self.domain_list = domain_list
-        self.sample_list = sample_list
+    '''
+        一个迭代器，每次迭代返回一个列表，其中每个元素是一个特定域的mini-batch。
+        模仿官方代码中 `sample_minibatch_fundus` 的行为。
+        确保每个返回的“mini-batch of domains”中包含所有指定域的子批次。
+    '''
+    def __init__(self, root_dir, domain_list, batch_size_per_domain, transform=None):
+        self.datasets = {}  # 包含domain_list中所有域的batch_size_per_domain个数据
+        self.data_loaders = {}
+        self.iterators = {}
+        self.domain_list = domain_list  # 要训练的域列表
+        self.batch_size_per_domain = batch_size_per_domain
+        self.current_iteration = 0
 
-        self.datasets = {
-            domain: FundusDataset(root_dir, domain)
-            for domain in domain_list
-        }
-        self.domain_sizes = {
-            domain: len(dataset)
-            for domain, dataset in self.datasets.items()
-        }
-        # 随机索引
-        self.domain_indices = {
-            domain: torch.randperm(size).tolist()
-            for domain, size in self.domain_sizes.items()
-        }
-        self.current_indices = {domain: 0 for domain in self.domain_list}
+        for domain_id in domain_list:
+            dataset = FundusDataset(root_dir=root_dir, domain=domain_id,transform=transform)
+            # DataLoader的batch_size设置为每个域的batch_size_per_domain
+            # drop_last=True 确保每个域的子批次大小一致
+            dataloader = DataLoader(dataset, batch_size=batch_size_per_domain, shuffle=True, num_workers=0,
+                                    drop_last=True)
+            self.datasets[domain_id] = dataset
+            self.data_loaders[domain_id] = dataloader
+            self.iterators[domain_id] = iter(dataloader)
 
-    # 每个epoch都要打乱
-    def __iter__(self):
-        self.current_indices = {domain: 0 for domain in self.domain_list}
-        for domain in self.domain_list:
-            self.domain_indices[domain] = torch.randperm(self.domain_sizes[domain]).tolist()
-        return self
+        # 最大迭代次数取决于最短的dataloader
+        # 如果某个域的DataLoader为空，则min()会报错，需要处理
+        if not self.data_loaders:
+            self.max_iterations = 0
+        else:
+            self.max_iterations = min(len(dl) for dl in self.data_loaders.values())
 
     def __len__(self):
-        "计算一个epoch中的batch数量"
-        # 找到限制batch数量的域（样本数/每个batch取样数 最小的那个）
-        min_batches = float('inf')
-        for domain_idx, domain in enumerate(self.domain_list):
-            num_samples = self.domain_sizes[domain]  # 该域的所有图片
-            samples_per_batch = self.sample_list[domain_idx]
-            possible_batches = num_samples // samples_per_batch
-            min_batches = min(min_batches, possible_batches)
-        return min_batches
+        return self.max_iterations
+
+    # 一次迭代取一个batch数据
+    def __iter__(self):
+        for domain_id in self.domain_list:
+            self.iterators[domain_id] = iter(self.data_loaders[domain_id])
+        self.current_iteration = 0
+        return self
 
     def __next__(self):
-        batch_data = {
-            'image': [],
-            'mask': [],
-            'domain': []
-        }
-        # 只要有一个域到达末尾就停止迭代
-        if any(self.current_indices[domain] >= self.domain_sizes[domain] for domain in self.domain_list):
+        if self.current_iteration >= self.max_iterations:
             raise StopIteration
 
-        for domain_idx,domain in enumerate(self.domain_list):
-            # if self.current_indices[domain] >= self.domain_sizes[domain]:
-            #     self.domain_indices[domain] = torch.randperm(self.domain_sizes[domain]).tolist()
-            #     self.current_indices[domain] = 0
+        batch_per_domain = []
+        for domain_id in self.domain_list:
+            batch_per_domain.append(next(self.iterators[domain_id]))
 
-            samples=self.sample_list[domain_idx]
-            for i in range(samples):
-                idx=self.domain_indices[domain][self.current_indices[domain]]
-                data=self.datasets[domain][idx]
-                batch_data['image'].append(data['image'].unsqueeze(0))
-                batch_data['mask'].append(data['mask'].unsqueeze(0))
-                batch_data['domain'].append(torch.tensor([data['domain']]))
-                self.current_indices[domain]+=1
+        self.current_iteration += 1
+        return batch_per_domain  # 返回一个列表，每个元素是一个域的字典batch
 
-        return {
-            'image': torch.cat(batch_data['image'], dim=0),
-            'mask': torch.cat(batch_data['mask'], dim=0),
-            'domain': torch.cat(batch_data['domain'], dim=0)
-        }
+
+# --- MultiDomainDataset (用于验证集，因为它只包含一个域)
+class MultiDomainDataset(Dataset):
+    '''
+        用于组合来自多个域的数据集，并为DataLoader提供一个统一的接口。
+        这样DataLoader会返回一个混合了所有指定域数据的batch。
+        用于验证集时，split_ids通常只包含一个域。
+    '''
+
+    def __init__(self, root_dir, split_ids, transform=None):
+        self.datasets = []
+        self.domain_map = {}  # 记录原始 domain_id 到内部索引的映射
+        self.domain_start_indices = []  # 记录每个域数据在合并后的总列表中的起始索引
+
+        current_idx = 0
+        for i, domain_id in enumerate(split_ids):
+            dataset = FundusDataset(root_dir=root_dir, domain=domain_id, transform=transform)
+            self.datasets.append(dataset)
+            self.domain_map[domain_id] = i  # 存储原始domain_id及其内部索引
+            self.domain_start_indices.append(current_idx)
+            current_idx += len(dataset)
+
+        self.total_len = current_idx  # 合并后的总长度
+
+    def __len__(self):
+        return self.total_len
+
+    def __getitem__(self, idx):
+        # 根据图片idx找到对应的原始域和该域内的索引
+        '''
+            比如0:200 1:300 2:400  domain_start_indices:0,200,500,900
+            idx=315 取自1域，在1域的索引是315-200=115
+        '''
+        domain_idx = 0
+        for i, start_idx in enumerate(self.domain_start_indices):
+            if idx >= start_idx:  # 找到最后一个
+                domain_idx = i  # 315->1
+            else:
+                break
+
+        # 计算该域内的相对索引
+        relative_idx = idx - self.domain_start_indices[domain_idx]  # 315-200=115
+        # 取样本
+        sample = self.datasets[domain_idx][relative_idx]
+        return sample
 
 
 if __name__ == '__main__':
     root_dir = '/IMBR_Data/Student-home/2022U_ZhaoYue/MyCode/CDDSA/data'
-    domain_list = [0,2,3]
-    sample_list=[4,4,10]
 
-    iterator = MultiDomainIterator(root_dir, domain_list, sample_list)
-    print("iterator length: {}".format(len(iterator)))
+    composed_transforms = transforms.Compose([
+        ToTensor()
+    ])
 
-    print("dataloader")
-    for i, batch in enumerate(iterator):
-        print(f"\\nBatch {i+1}:")
-        print(f"Images: {batch['image'].shape}")
-        print(f"Domains: {batch['domain']}")
+    test_domain_id = 0
+    train_domains =[1,2]
 
-        # 显示每个域的样本数量
-        unique_domains, counts = torch.unique(batch['domain'], return_counts=True)
-        print("Domain counts:")
-        for d, c in zip(unique_domains.tolist(), counts.tolist()):
-            print(f"Domain {d}: {c}")
+    print(f"Train Domains: {train_domains}")
+    print(f"Test Domain: {test_domain_id}")
+
+    # 训练数据迭代器 (使用 MultiDomainIterator)
+    total_batch_size = 8
+    batch_size_per_domain = total_batch_size // len(train_domains)
+
+    train_iterator = MultiDomainIterator(
+        root_dir,
+        domain_list=train_domains,
+        batch_size_per_domain=batch_size_per_domain,
+        transform=composed_transforms
+    )
+
+    print(f"Train MultiDomainIterator length: {len(train_iterator)}")  # min(400,650,1020)/5 最小迭代数
+
+    for i, domains_batch_list in enumerate(train_iterator):
+        print(f"\nBatch {i + 1}:")
+        # domains_batch_list 是一个列表，每个元素是一个域的 batch dict
+        for dc, domain_batch in enumerate(domains_batch_list):
+            print(f"  Domain {domain_batch['domain_id'][0].item()} (index {dc}):")
+            print(f"    Images shape: {domain_batch['image'].shape}")  #
+            print(f"    Masks shape: {domain_batch['mask'].shape}")  #
+            print(f"    Domain IDs: {domain_batch['domain_id']}")  #
+
+        if i == 1:  # 只打印几个批次
+            break
+
+    # 验证数据加载 (使用 MultiDomainDataset 和 DataLoader)
+    val_dataset = MultiDomainDataset(root_dir, split_ids=[test_domain_id], transform=composed_transforms)
+    val_loader = DataLoader(val_dataset, batch_size=total_batch_size, shuffle=False, num_workers=0, drop_last=True)
+
+    print(f"\nValidation DataLoader length: {len(val_loader)}")
+    for i, batch in enumerate(val_loader):
+        print(f"\nValidation Batch {i + 1}:")
+        print(f"Images shape: {batch['image'].shape}")
+        print(f"Masks shape: {batch['mask'].shape}")
+        print(f"Domain IDs: {batch['domain_id']}")
+        if i == 1:
+            break
