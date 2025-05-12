@@ -1,6 +1,8 @@
 import torch.nn as nn
 import torch
 from .encoder import SEncoder,AEncoder
+from .block import MLP
+import torch.nn.functional as F
 
 class AdaIN(nn.Module):
     '''

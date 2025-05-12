@@ -1,5 +1,6 @@
 from torch import nn
 import torch
+import torch.nn.functional as F
 
 # AEncoder基于Unet，设置最后几层的输出维度位T，使用tanh作为激活函数
 class Unet(nn.Module):
@@ -87,6 +88,23 @@ def conv_bn_lrelu(in_channels,out_channels,kernel_size=3,stride=1,padding=0):
         nn.LeakyReLU(0.2,inplace=True)
     )
 
+class MLP(nn.Module):
+    def __init__(self, input_dim, output_dim, dim):
+        super(MLP, self).__init__()
+        self.fc1 = nn.Linear(input_dim, dim)
+        self.fc2 = nn.Linear(dim, dim)
+        self.fc3 = nn.Linear(dim, output_dim)
+
+    def forward(self, x):
+        x = x.view(x.size(0), -1)
+        out = self.fc1(x)
+        out = F.relu(out, inplace=True)
+        out = self.fc2(out)
+        out = F.relu(out, inplace=True)
+        out = self.fc3(out)
+        out = F.relu(out, inplace=True)
+
+        return out
 
 if __name__ == '__main__':
     model = Unet(in_channels=3, hidden_channels=32, out_channels=16)  # T=16

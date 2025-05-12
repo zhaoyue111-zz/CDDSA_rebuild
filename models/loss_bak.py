@@ -2,7 +2,7 @@ import torch.nn as nn
 import torch
 import torch.nn.functional as F
 import numpy as np
-from .decoder import Decoder
+from .mydecoder import Decoder
 
 def DomainStyleContrastiveLoss(style_codes, domain_labels,temperature=0.1):
     '''

@@ -1,24 +1,25 @@
 import os
+import sys
 
 from torchvision.transforms import transforms
 
 # os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # tensorflow报警告
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # 插件注册
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:128"
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1,2,3"
 
 import argparse
 # torch.backends.cudnn.enabled = False # 除非你有特定的原因，否则通常保持cudnn启用
 import torch.optim as optim
 from models.encoder import AEncoder, SEncoder  # 假设 SEncoder 对应官方 MEncoder
-from models.decoder import Decoder  # 假设 Decoder 是你的模型类
+# from models.mydecoder import Decoder  # 假设 Decoder 是你的模型类
+from models.mydecoder import Ada_Decoder
 from models.segmentor import Segmentor
 from data.dataloader import *  # 导入修改后的数据加载器
 from torch.utils.data import DataLoader  # 导入 DataLoader
-from torch.utils.tensorboard import SummaryWriter  # TensorBoardX 更名为 torch.utils.tensorboard
+from torch.utils.tensorboard import SummaryWriter
 from utils.weight_init import initialize_weights  # 导入权重初始化函数
 from utils.average_meter import AverageMeter  # 假设你有一个平均值计量器工具类
-from tqdm import tqdm
 from datetime import datetime
 import random
 import numpy as np
@@ -36,7 +37,7 @@ def parse_args():
     parser.add_argument('--train_domains', nargs='+', type=int, default=[0, 1, 2])
     parser.add_argument('--all_domains', nargs='+', type=int, default=[0, 1, 2,3])
     parser.add_argument('--num_classes', type=int, default=3, help='number of classes for segmentation')
-    parser.add_argument('--style_code_dim', type=int, default=8)
+    parser.add_argument('--style_code_dim', type=int, default=16)
     parser.add_argument('--anatomy_channel', type=int, default=8, help="the out channel of anatomy encoder")
     # 打印设置
     parser.add_argument('--batch_size', type=int, default=8,
@@ -97,11 +98,10 @@ class Trainer:
             out_channels=args.anatomy_channel
         ).to(self.device)
 
-        self.decoder = Decoder(
-            in_channel=args.anatomy_channel,
-            hidden_channel=256,
-            out_channel=args.anatomy_channel,
-            style_code_dim=args.style_code_dim
+        self.decoder = Ada_Decoder(
+            anatomy_out_channel=args.anatomy_channel,
+            z_length=args.style_code_dim,
+            out_channel=args.in_channel
         ).to(self.device)
 
         self.segmentor = Segmentor(
@@ -194,13 +194,13 @@ class Trainer:
 
 
     def train_epoch(self, train_iterator, epoch):
-        print("len:",len(train_iterator))
         self.aencoder.train()
         self.sencoder.train()
         self.decoder.train()
         self.segmentor.train()
 
-        losses_meter = AverageMeter()  # 总损失
+        total_losses_meter = AverageMeter()
+        inner_losses_meter = AverageMeter()  # 总损失
         seg_losses_meter = AverageMeter()
         reco_losses_meter = AverageMeter()
         recoz_losses_meter = AverageMeter()
@@ -209,8 +209,7 @@ class Trainer:
 
         # 使用 MultiDomainIterator 迭代，每次 `sample` 是一个列表
         # 列表中每个元素是一个域的 mini-batch
-        for batch_idx, sample_list_per_domain in tqdm(train_iterator, desc=f'Train Epoch {epoch}', ncols=80,
-                                                      leave=False):
+        for batch_idx, sample_list_per_domain in enumerate(train_iterator):
             # 一个域
             self.opt_ae.zero_grad()
             self.opt_style.zero_grad()
@@ -224,10 +223,6 @@ class Trainer:
             dc_num = len(self.train_domains)  # 训练域的数量
 
             # --- 域内损失计算 (Intra-domain Losses) ---
-            # print("sample_list_per_domain:")# {'image',tensor,'mask':tensor,domain_id:tensor}
-            # print("image:",sample_list_per_domain['image'].shape)  #[8, 3, 256, 256]
-            # print("mask:",sample_list_per_domain['mask'].shape)    #[8, 256, 256]
-            # print("domain_id:",sample_list_per_domain['domain_id'].shape) #[8]
             for dc, domain_batch in enumerate(sample_list_per_domain):
                 image = domain_batch['image'].cuda()
                 gt = domain_batch['mask'].cuda()
@@ -235,16 +230,20 @@ class Trainer:
 
                 # 前向传播
                 a_out = self.aencoder(image)
+                # print("a_out", a_out.shape)  # [B,8,256,256]
                 # 1. 分割损失
                 seg_pred = self.segmentor(a_out)
+                # print("seg_pred",seg_pred.shape)  # [B,3,256,256]
                 seg_loss = Seg_loss(seg_pred, gt)  # BCEWithLogitsLoss 需要 float target
 
                 z_out, mu_out, logvar_out = self.sencoder(image)  # 风格编码器
+                # print("z_out",z_out.shape)  # [B,16]
                 # 2. KL散度损失 (正则化风格隐空间)
                 kl_loss = KL_loss(logvar_out, mu_out)
 
                 # 3. 重建损失
                 rec = self.decoder(a_out, z_out)
+                # print("rec:",rec.shape) # [B,3,256,256]
                 rec_loss = Reconstructed_loss(image,rec)
 
                 # 4. 风格重建损失
@@ -264,7 +263,7 @@ class Trainer:
 
                 # 记录域内损失
                 # 注意：meter update 的 `n` 参数应是当前子批次的大小
-                losses_meter.update(domain_current_intra_loss.item(), image.size(0))
+                inner_losses_meter.update(domain_current_intra_loss.item(), image.size(0))
                 seg_losses_meter.update(seg_loss.item(), image.size(0))
                 reco_losses_meter.update(rec_loss.item(), image.size(0))
                 recoz_losses_meter.update(recoz_loss.item(), image.size(0))
@@ -287,6 +286,8 @@ class Trainer:
             total_loss = (total_intra_domain_loss_in_batch / dc_num) + \
                          self.args.style_w * style_loss
 
+            total_losses_meter.update(total_loss.item(), all_domain_labels_in_batch_concat.size(0))
+
             # 反向传播和优化
             total_loss.backward()
             self.opt_ae.step()
@@ -302,8 +303,14 @@ class Trainer:
             self.writer.add_scalar('Train/Style_Loss', style_losses_meter.avg, global_step)
 
         print(
-            f"Epoch {epoch} Train Loss: {losses_meter.avg:.4f} (intra), Seg: {seg_losses_meter.avg:.4f}, Reco: {reco_losses_meter.avg:.4f}, RecoZ: {recoz_losses_meter.avg:.4f}, KL: {kl_losses_meter.avg:.4f}, Style: {style_losses_meter.avg:.4f}")
-        return losses_meter.avg
+            f"Epoch {epoch} Train Loss: {total_losses_meter.avg:.4f} (total), "
+            f"Seg: {seg_losses_meter.avg:.4f}, "
+            f"Reco: {reco_losses_meter.avg:.4f}, "
+            f"RecoZ: {recoz_losses_meter.avg:.4f}, "
+            f"KL: {kl_losses_meter.avg:.4f}, "
+            f"Style: {style_losses_meter.avg:.4f}")
+
+        return total_losses_meter.avg
 
     @torch.no_grad()
     def validate(self, val_loader, epoch):
@@ -316,7 +323,7 @@ class Trainer:
         val_seg_losses_meter = AverageMeter()
         val_reco_losses_meter = AverageMeter()
 
-        for batch_idx, sample in tqdm(val_loader, desc=f'Val Epoch {epoch}', ncols=80, leave=False):
+        for batch_idx, sample in enumerate(val_loader):
             image = sample['image'].cuda()
             mask = sample['mask'].cuda()
 
@@ -348,6 +355,7 @@ class Trainer:
 
     def run(self, train_iterator, val_loader):
         for epoch in range(1, self.args.epochs + 1):
+            print("Epoch:",epoch)
             train_loss = self.train_epoch(train_iterator, epoch)
 
             if epoch % self.args.val_interval == 0:

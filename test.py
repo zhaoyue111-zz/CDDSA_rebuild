@@ -2,7 +2,7 @@ import argparse
 import torch
 import os
 from models.encoder import AEncoder, SEncoder
-from models.decoder import Decoder
+from models.mydecoder import Decoder
 from models.segmentor import Segmentor
 from data.dataloader_bak import FundusDataset
 from torch.utils.data import DataLoader
